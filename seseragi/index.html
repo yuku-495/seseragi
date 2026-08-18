@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>せせらぎ - 秘密の川</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #d2e1eb;
+      font-family: sans-serif;
+    }
+
+    /* ルームコード入力用モーダル */
+    #room-modal {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 999;
+    }
+
+    .modal-content {
+      background: #fdfbf7;
+      padding: 30px;
+      border-radius: 16px;
+      text-align: center;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+    }
+
+    .modal-content input {
+      font-size: 18px;
+      padding: 8px 12px;
+      border: 2px solid #b4c8d7;
+      border-radius: 8px;
+      outline: none;
+      text-align: center;
+      margin-bottom: 15px;
+    }
+
+    .modal-content button {
+      font-size: 16px;
+      padding: 8px 20px;
+      background: #82af8c;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+  </style>
+
+  <!-- p5.js CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+  <!-- Firebase SDK (v9 compat) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+</head>
+<body>
+
+  <!-- 暗号（ルームコード）入力画面 -->
+  <div id="room-modal">
+    <div class="modal-content">
+      <h2>🌊 秘密の川へはいる</h2>
+      <p>合言葉（暗号）を入力してね</p>
+      <input type="text" id="room-code-input" placeholder="例: secret123">
+      <br>
+      <button onclick="joinRoom()">川に入る 🍃</button>
+    </div>
+  </div>
+
+  <script>
+    // --------------------------------------------------
+    // 🔥 Firebase 設定（設定完了済み！）
+    // --------------------------------------------------
+    const firebaseConfig = {
+      apiKey: "AIzaSyCMsCeqr42sKJMWGdnBdCsj_GSBzqNpN1c",
+      authDomain: "seseragi-d08a1.firebaseapp.com",
+      databaseURL: "https://seseragi-d08a1-default-rtdb.firebaseio.com",
+      projectId: "seseragi-d08a1",
+      storageBucket: "seseragi-d08a1.appspot.com",
+      messagingSenderId: "438367791173",
+      appId: "1:438367791173:web:c2c36e4cb18d994d211b2c",
+      measurementId: "G-X4J5HKXYKX"
+    };
+
+    // Firebase初期化
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    let roomCode = "";
+    let roomRef = null;
+
+    function joinRoom() {
+      const input = document.getElementById("room-code-input").value.trim();
+      if (!input) {
+        alert("合言葉を入力してね！");
+        return;
+      }
+
+      roomCode = input;
+      document.getElementById("room-modal").style.display = "none";
+
+      // 該当する暗号のノードに接続＆リアルタイム受信スタート！
+      roomRef = db.ref("rooms/" + roomCode + "/items");
+
+      // 他の人がメッセージを流したときのリアルタイム受信
+      roomRef.on("child_added", (snapshot) => {
+        const data = snapshot.val();
+        
+        items.push({
+          x: width + 50,
+          baseY: data.baseY || random(height * 0.4, height * 0.7),
+          speed: data.speed || 1.2,
+          type: data.type,
+          angle: 0,
+          strokes: data.strokes || []
+        });
+      });
+    }
+
+    // --------------------------------------------------
+    // 🎨 p5.js メイン処理
+    // --------------------------------------------------
+    let items = []; 
+    let noiseSeedVal;
+
+    let appState = "RIVER"; 
+    let menuX = 0, menuY = 0;
+    let pressStartTime = 0;
+    let holdDuration = 400; 
+
+    let selectedType = ""; 
+    let currentStroke = []; 
+    let allStrokes = [];    
+
+    let lastSpawnTime = -5000;
+    let cooldownDuration = 5000; // 5秒クールダウン
+
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      noiseSeedVal = random(1000);
+    }
+
+    function windowResized() {
+      resizeCanvas(windowWidth, windowHeight);
+    }
+
+    function draw() {
+      background(210, 225, 235);
+      drawPaperTexture();
+      drawThreeLayerRiver();
+
+      for (let i = items.length - 1; i >= 0; i--) {
+        let obj = items[i];
+        obj.x -= obj.speed;
+        obj.y = obj.baseY + sin(obj.x * 0.02) * 15;
+        obj.angle = sin(obj.x * 0.03) * 0.15;
+
+        drawFloatingItem(obj);
+
+        if (obj.x < -250) {
+          items.splice(i, 1);
+        }
+      }
+
+      if (appState === "HOLDING") {
+        if (millis() - pressStartTime > holdDuration) {
+          if (millis() - lastSpawnTime < cooldownDuration) {
+            appState = "RIVER";
+          } else {
+            appState = "MENU";
+          }
+        }
+      } else if (appState === "MENU") {
+        drawRadialMenu(menuX, menuY);
+      } else if (appState === "DRAWING") {
+        drawDrawingCanvas();
+      }
+
+      // クールダウンタイマー表示
+      let remaining = cooldownDuration - (millis() - lastSpawnTime);
+      if (remaining > 0) {
+        push();
+        noStroke();
+        fill(90, 110, 130, 180);
+        textSize(13);
+        textAlign(LEFT, TOP);
+        let secLeft = ceil(remaining / 1000);
+        text(`🍵 次は ${secLeft} 秒後に流せるよ (部屋: ${roomCode})`, 24, 24);
+        pop();
+      } else if (roomCode) {
+        push();
+        noStroke();
+        fill(90, 110, 130, 180);
+        textSize(13);
+        textAlign(LEFT, TOP);
+        text(`🔑 部屋: ${roomCode}`, 24, 24);
+        pop();
+      }
+    }
+
+    function drawPaperTexture() {
+      noStroke();
+      randomSeed(noiseSeedVal);
+      for (let i = 0; i < 1500; i++) {
+        let px = random(width);
+        let py = random(height);
+        fill(255, 255, 255, 25);
+        ellipse(px, py, random(1, 2.5), random(1, 2.5));
+      }
+    }
+
+    function drawThreeLayerRiver() {
+      noStroke();
+      let baseH = height * 0.5;
+
+      fill(100, 150, 195, 70);
+      drawWaveShape(baseH - 40, 35);
+
+      fill(150, 195, 225, 80);
+      drawWaveShape(baseH, 45);
+
+      fill(255, 255, 255, 60);
+      drawWaveShape(baseH + 30, 30);
+    }
+
+    function drawWaveShape(baseY, amplitude) {
+      beginShape();
+      vertex(0, baseY - 50);
+      for (let x = 0; x <= width; x += 20) {
+        let y = baseY + sin(x * 0.01 + frameCount * 0.02) * amplitude;
+        vertex(x, y);
+      }
+      vertex(width, height);
+      vertex(0, height);
+      endShape(CLOSE);
+    }
+
+    function drawFloatingItem(obj) {
+      push();
+      translate(obj.x, obj.y);
+      rotate(obj.angle);
+
+      if (obj.type === "leaf") {
+        noStroke();
+        fill(120, 175, 130, 210);
+        ellipse(0, 0, 160, 75);
+        stroke(90, 140, 100, 210);
+        strokeWeight(4);
+        line(-65, 0, 65, 0);
+      } else if (obj.type === "bottle") {
+        noStroke();
+        fill(235, 240, 245, 200);
+        stroke(180, 200, 215, 230);
+        strokeWeight(4);
+        rectMode(CENTER);
+        rect(0, 0, 95, 155, 14); 
+        rect(0, -90, 38, 28, 6); 
+      }
+
+      if (obj.strokes && obj.strokes.length > 0) {
+        stroke(70, 90, 110);
+        strokeWeight(3.5);
+        noFill();
+        for (let s of obj.strokes) {
+          beginShape();
+          for (let pt of s) {
+            vertex(pt.x, pt.y);
+          }
+          endShape();
+        }
+      }
+
+      pop();
+    }
+
+    function drawRadialMenu(x, y) {
+      push();
+      noStroke();
+      fill(255, 255, 255, 230);
+      ellipse(x, y, 170, 170);
+
+      noFill();
+      stroke(180, 200, 215, 200);
+      strokeWeight(3);
+      ellipse(x, y, 170, 170);
+
+      fill(90, 120, 140);
+      noStroke();
+      textSize(14);
+      textAlign(CENTER, CENTER);
+      
+      text("🍃 葉っぱ", x, y - 45);
+      text("🍾 瓶", x - 45, y + 30);
+      text("✍️ 文字", x + 45, y + 30);
+      pop();
+    }
+
+    function isInsideDrawingArea(dx, dy) {
+      if (selectedType === "leaf") {
+        return (dx * dx) / (110 * 110) + (dy * dy) / (50 * 50) <= 1.0;
+      } else if (selectedType === "bottle") {
+        let inBody = (abs(dx) <= 65 && abs(dy) <= 105);
+        let inNeck = (abs(dx) <= 25 && dy >= -138 && dy <= -102);
+        return inBody || inNeck;
+      } else if (selectedType === "text") {
+        return (abs(dx) <= 120 && abs(dy) <= 50);
+      }
+      return false;
+    }
+
+    function drawDrawingCanvas() {
+      push();
+      fill(0, 0, 0, 80);
+      rect(0, 0, width, height);
+
+      push();
+      translate(width / 2, height / 2);
+
+      if (selectedType === "leaf") {
+        noStroke();
+        fill(120, 175, 130, 230);
+        ellipse(0, 0, 220, 100);
+        stroke(90, 140, 100, 230);
+        strokeWeight(4);
+        line(-90, 0, 90, 0);
+      } else if (selectedType === "bottle") {
+        noStroke();
+        fill(235, 240, 245, 220);
+        stroke(180, 200, 215, 240);
+        strokeWeight(4);
+        rectMode(CENTER);
+        rect(0, 0, 130, 210, 16); 
+        rect(0, -120, 50, 36, 8); 
+      } else if (selectedType === "text") {
+        noFill();
+        stroke(180, 190, 200, 150);
+        strokeWeight(2);
+        rectMode(CENTER);
+        rect(0, 0, 240, 100, 12);
+      }
+
+      stroke(70, 90, 110);
+      strokeWeight(3.5);
+      noFill();
+      for (let s of allStrokes) {
+        beginShape();
+        for (let pt of s) {
+          vertex(pt.x, pt.y);
+        }
+        endShape();
+      }
+      beginShape();
+      for (let pt of currentStroke) {
+        vertex(pt.x, pt.y);
+      }
+      endShape();
+
+      pop();
+
+      let btnY = height - 70;
+      fill(130, 175, 140);
+      rectMode(CENTER);
+      rect(width / 2 - 70, btnY, 120, 38, 8);
+      fill(215, 140, 140);
+      rect(width / 2 + 70, btnY, 120, 38, 8);
+
+      fill(255);
+      textSize(15);
+      textAlign(CENTER, CENTER);
+      text("川に流す 🌊", width / 2 - 70, btnY);
+      text("やめる ×", width / 2 + 70, btnY);
+
+      pop();
+    }
+
+    function mousePressed() {
+      if (!roomCode) return;
+
+      if (appState === "RIVER") {
+        if (millis() - lastSpawnTime < cooldownDuration) return;
+        pressStartTime = millis();
+        appState = "HOLDING";
+        menuX = mouseX;
+        menuY = mouseY;
+      } else if (appState === "DRAWING") {
+        let btnY = height - 70;
+
+        if (mouseX > width / 2 - 130 && mouseX < width / 2 - 10 &&
+            mouseY > btnY - 19 && mouseY < btnY + 19) {
+          
+          if (millis() - lastSpawnTime < cooldownDuration) return;
+
+          let scaleFactor = 1.0;
+          if (selectedType === "leaf") scaleFactor = 160 / 220; 
+          else if (selectedType === "bottle") scaleFactor = 95 / 130;  
+
+          let scaledStrokes = [];
+          for (let s of allStrokes) {
+            let newS = [];
+            for (let pt of s) {
+              newS.push({ x: pt.x * scaleFactor, y: pt.y * scaleFactor });
+            }
+            scaledStrokes.push(newS);
+          }
+
+          let randomBaseY = random(height * 0.4, height * 0.7);
+
+          if (roomRef) {
+            roomRef.push({
+              type: selectedType,
+              strokes: scaledStrokes,
+              baseY: randomBaseY,
+              speed: 1.2,
+              timestamp: firebase.database.ServerValue.TIMESTAMP
+            });
+          }
+
+          lastSpawnTime = millis();
+          allStrokes = [];
+          appState = "RIVER";
+          return;
+        }
+
+        if (mouseX > width / 2 + 10 && mouseX < width / 2 + 130 &&
+            mouseY > btnY - 19 && mouseY < btnY + 19) {
+          allStrokes = [];
+          appState = "RIVER";
+          return;
+        }
+
+        let cx = width / 2;
+        let cy = height / 2;
+        let dx = mouseX - cx;
+        let dy = mouseY - cy;
+
+        if (isInsideDrawingArea(dx, dy)) {
+          currentStroke = [];
+          currentStroke.push({ x: dx, y: dy });
+          allStrokes.push(currentStroke);
+        }
+      }
+    }
+
+    function mouseDragged() {
+      if (appState === "DRAWING") {
+        let cx = width / 2;
+        let cy = height / 2;
+        let dx = mouseX - cx;
+        let dy = mouseY - cy;
+
+        if (isInsideDrawingArea(dx, dy) && currentStroke.length > 0) {
+          currentStroke.push({ x: dx, y: dy });
+        }
+      }
+    }
+
+    function mouseReleased() {
+      if (appState === "HOLDING") {
+        appState = "RIVER";
+      } else if (appState === "MENU") {
+        let dTop = dist(mouseX, mouseY, menuX, menuY - 45);
+        let dLeft = dist(mouseX, mouseY, menuX - 45, menuY + 30);
+
+        if (dTop < 50) selectedType = "leaf";
+        else if (dLeft < 50) selectedType = "bottle";
+        else selectedType = "text";
+
+        allStrokes = [];
+        appState = "DRAWING";
+      }
+    }
+  </script>
+</body>
+</html>
